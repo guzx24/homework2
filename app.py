@@ -1,61 +1,125 @@
 import gradio as gr
-import os
-import time
+from chat import chat
+from search import search
 
-# Chatbot demo with multimodal input (text, markdown, LaTeX, code blocks, image, audio, & video). Plus shows support for streaming text.
-
+# 存储聊天记录（OpenAI格式）
 messages = []
-current_file_text = None
 
 def add_text(history, text):
     """
-    TODO
+    处理用户输入文本（支持/search指令）
     """
-    history = history + [(text, None)]
+    global messages
+    
+    # 添加到界面历史记录（显示原始内容）
+    history = history + [{"role": "user", "content": text}]
+    
+    # 处理搜索指令
+    if text.startswith("/search "):
+        search_content = text[8:].strip()
+        processed_content = search(search_content)
+        messages.append({"role": "user", "content": processed_content})
+    else:
+        messages.append({"role": "user", "content": text})
+    
     return history, gr.update(value="", interactive=False)
-
-
-def add_file(history, file):
-    """
-    TODO
-    """
-    history = history + [((file.name,), None)]
-    return history
-
 
 def bot(history):
     """
-    TODO
+    生成AI助手的回复（流式传输）
     """
-    response = "**That's cool!**"
-    history[-1][1] = response
-    return history
+    global messages
+    
+    try:
+        # 获取流式响应生成器
+        response_generator = chat(messages)
+        
+        # 初始化回复内容
+        response = ""
+        
+        # 创建新历史记录，保留之前的所有记录
+        new_history = history.copy()
+        
+        # 添加等待回复的状态
+        new_history.append({"role": "assistant", "content": ""})
+        
+        # 逐步获取流式响应
+        for chunk in response_generator:
+            response += chunk
+            # 更新最后一条助手的回复
+            new_history[-1] = {"role": "assistant", "content": response}
+            yield new_history
+        
+        # 更新完整聊天记录
+        messages.append({"role": "assistant", "content": response})
+        
+    except Exception as e:
+        error_msg = f"⚠️ error: {str(e)}"
+        # 添加错误消息
+        if history:
+            new_history = history.copy()
+        else:
+            new_history = []
+        new_history.append({"role": "assistant", "content": error_msg})
+        yield new_history
+
+def clear_chat():
+    """
+    清除聊天记录
+    """
+    global messages
+    messages = []
+    return []
 
 with gr.Blocks() as demo:
-    chatbot = gr.Chatbot(
-        [],
-        elem_id="chatbot",
-        avatar_images=(None, (os.path.join(os.path.dirname(__file__), "avatar.png"))),
-    )
-
+    # 使用新格式的Chatbot组件
+    chatbot = gr.Chatbot([], 
+                        elem_id="chatbot", 
+                        label="AI助手", 
+                        type="messages")  # 关键修改
+    
     with gr.Row():
         txt = gr.Textbox(
             scale=4,
             show_label=False,
-            placeholder="Enter text and press enter, or upload an image",
+            placeholder="输入消息或指令（如/search 内容）",
             container=False,
         )
-        clear_btn = gr.Button('Clear')
-        btn = gr.UploadButton("📁", file_types=["image", "video", "audio", "text"])
+        clear_btn = gr.Button('清除')
 
-    txt_msg = txt.submit(add_text, [chatbot, txt], [chatbot, txt], queue=False).then(
-        bot, chatbot, chatbot
+    # 文本提交处理
+    txt_msg = txt.submit(
+        add_text, 
+        [chatbot, txt], 
+        [chatbot, txt], 
+        queue=False
+    ).then(
+        bot, 
+        chatbot, 
+        chatbot
     )
-    txt_msg.then(lambda: gr.update(interactive=True), None, [txt], queue=False)
-    file_msg = btn.upload(add_file, [chatbot, btn], [chatbot], queue=False).then(
-        bot, chatbot, chatbot
+    
+    txt_msg.then(
+        lambda: gr.update(interactive=True), 
+        None, 
+        [txt], 
+        queue=False
     )
-    clear_btn.click(lambda: messages.clear(), None, chatbot, queue=False)
+    
+    # 清除聊天记录
+    clear_btn.click(
+        clear_chat, 
+        None, 
+        chatbot, 
+        queue=False
+    )
 
-demo.queue()
-demo.launch()
+# 添加详细的启动配置
+if __name__ == "__main__":
+    demo.queue()
+    demo.launch(
+        server_name="0.0.0.0", 
+        server_port=7860,
+        debug=True,  # 启用调试模式
+        show_error=True  # 显示详细错误
+    )
