@@ -1,125 +1,138 @@
 import gradio as gr
+import os
+import time
+import requests
 from chat import chat
 from search import search
+import logging
 
-# 存储聊天记录（OpenAI格式）
+# 设置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 messages = []
+current_file_text = None
+
+def check_localai_health():
+    """检查LocalAI服务是否可用"""
+    try:
+        response = requests.get("http://localhost:8080/health", timeout=5)
+        if response.status_code == 200:
+            logger.info("LocalAI服务已启动并运行")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"无法连接到LocalAI服务: {str(e)}")
+        return False
 
 def add_text(history, text):
-    """
-    处理用户输入文本（支持/search指令）
-    """
-    global messages
+    global messages 
     
-    # 添加到界面历史记录（显示原始内容）
-    history = history + [{"role": "user", "content": text}]
+    # 检查LocalAI服务状态
+    if not check_localai_health():
+        history = history + [(text, "⚠️ 错误: 无法连接到LocalAI服务，请确保服务已启动")]
+        return history, gr.update(value="", interactive=True)
     
-    # 处理搜索指令
-    if text.startswith("/search "):
-        search_content = text[8:].strip()
-        processed_content = search(search_content)
-        messages.append({"role": "user", "content": processed_content})
+    # 记录原始消息
+    original_content = text
+    
+    if text.startswith("/search"):
+        search_query = text[8:].strip()
+        try:
+            new_content = search(search_query)
+            messages.append({"role": "user", "content": new_content})
+        except Exception as e:
+            logger.error(f"搜索错误: {str(e)}")
+            history = history + [(text, f"⚠️ 搜索错误: {str(e)}")]
+            return history, gr.update(value="", interactive=True)
     else:
         messages.append({"role": "user", "content": text})
     
+    history = history + [(text, None)]
+    
     return history, gr.update(value="", interactive=False)
 
-def bot(history):
-    """
-    生成AI助手的回复（流式传输）
-    """
+def add_file(history, file):
     global messages
-    
+    history = history + [((file.name,), None)]
+    messages.append({"role": "user", "content": file.name})
+    return history
+
+def bot(history):
+    global messages
+
     try:
-        # 获取流式响应生成器
-        response_generator = chat(messages)
-        
-        # 初始化回复内容
         response = ""
         
-        # 创建新历史记录，保留之前的所有记录
-        new_history = history.copy()
+        # 流式获取响应
+        for chunk in chat(messages):
+            if chunk:
+                response += chunk
+                
+                if history and history[-1][1] is None:
+                    history[-1] = (history[-1][0], chunk)
+                else:
+                    if history and history[-1][1]:
+                        history[-1] = (history[-1][0], history[-1][1] + chunk)
+                    else:
+                        history = history + [(None, chunk)]
+                
+                yield history
         
-        # 添加等待回复的状态
-        new_history.append({"role": "assistant", "content": ""})
-        
-        # 逐步获取流式响应
-        for chunk in response_generator:
-            response += chunk
-            # 更新最后一条助手的回复
-            new_history[-1] = {"role": "assistant", "content": response}
-            yield new_history
-        
-        # 更新完整聊天记录
-        messages.append({"role": "assistant", "content": response})
-        
+        if response:
+            messages.append({"role": "assistant", "content": response})
+            
     except Exception as e:
-        error_msg = f"⚠️ error: {str(e)}"
-        # 添加错误消息
-        if history:
-            new_history = history.copy()
+        logger.error(f"聊天错误: {str(e)}")
+        error_msg = f"⚠️ 错误: {str(e)}"
+        if history and history[-1][1] is None:
+            history[-1] = (history[-1][0], error_msg)
         else:
-            new_history = []
-        new_history.append({"role": "assistant", "content": error_msg})
-        yield new_history
+            history = history + [(None, error_msg)]
+        yield history
 
 def clear_chat():
-    """
-    清除聊天记录
-    """
     global messages
     messages = []
     return []
 
+# 应用启动时检查LocalAI服务
+if not check_localai_health():
+    logger.warning("LocalAI服务未运行，部分功能可能受限")
+
 with gr.Blocks() as demo:
-    # 使用新格式的Chatbot组件
-    chatbot = gr.Chatbot([], 
-                        elem_id="chatbot", 
-                        label="AI助手", 
-                        type="messages")  # 关键修改
+    gr.Markdown("# AI助手 - 基于LocalAI")
     
+    with gr.Row():
+        gr.Markdown("### 请确保LocalAI服务已运行: `docker compose up -d`")
+    
+    chatbot = gr.Chatbot(
+        [],
+        elem_id="chatbot",
+        avatar_images=(None, (os.path.join(os.path.dirname(__file__), "avatar.png"))),
+    )
+
     with gr.Row():
         txt = gr.Textbox(
             scale=4,
             show_label=False,
-            placeholder="输入消息或指令（如/search 内容）",
+            placeholder="输入文本并按回车，或上传文件",
             container=False,
         )
-        clear_btn = gr.Button('清除')
+        clear_btn = gr.Button('清空聊天')
+        btn = gr.UploadButton("📁 上传文件", file_types=["image", "video", "audio", "text"])
 
-    # 文本提交处理
-    txt_msg = txt.submit(
-        add_text, 
-        [chatbot, txt], 
-        [chatbot, txt], 
-        queue=False
-    ).then(
-        bot, 
-        chatbot, 
-        chatbot
-    )
-    
-    txt_msg.then(
-        lambda: gr.update(interactive=True), 
-        None, 
-        [txt], 
-        queue=False
-    )
-    
-    # 清除聊天记录
-    clear_btn.click(
-        clear_chat, 
-        None, 
-        chatbot, 
-        queue=False
-    )
+    with gr.Row():
+        gr.Markdown("**指令示例**: `/search 孙悟空` | `/image 可爱的海獭宝宝`")
 
-# 添加详细的启动配置
-if __name__ == "__main__":
-    demo.queue()
-    demo.launch(
-        server_name="0.0.0.0", 
-        server_port=7860,
-        debug=True,  # 启用调试模式
-        show_error=True  # 显示详细错误
+    txt_msg = txt.submit(add_text, [chatbot, txt], [chatbot, txt], queue=False).then(
+        bot, chatbot, chatbot
     )
+    txt_msg.then(lambda: gr.update(interactive=True), None, [txt], queue=False)
+    file_msg = btn.upload(add_file, [chatbot, btn], [chatbot], queue=False).then(
+        bot, chatbot, chatbot
+    )
+    clear_btn.click(clear_chat, None, chatbot, queue=False)
+
+demo.queue()
+demo.launch()
