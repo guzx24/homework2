@@ -1,16 +1,21 @@
-version: '3.6'
+# 删除这行：version: '3.6'
 
 services:
-  api:
-    image: quay.io/go-skynet/local-ai:v1.25.0-ffmpeg
-    build:
-      context: .
-      dockerfile: Dockerfile
+  localai:
+    image: quay.io/go-skynet/local-ai:latest
     ports:
-      - 8080:8080
-    env_file:
-      - .env
+      - "8080:8080"
     volumes:
-      - ./models:/models:cached
-      - ./generated/images:/tmp/generated/images/
-    command: ["/usr/bin/local-ai" ]
+      - ./models:/models
+      - ./images:/generated-images
+    environment:
+      - THREADS=4
+      - CONTEXT_SIZE=1024
+      - MODELS_TIMEOUT=10m
+      - DEBUG=true
+      - SKIP_GRPC_UPDATE=true 
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    restart: always
