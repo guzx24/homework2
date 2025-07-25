@@ -5,7 +5,8 @@ from fetch import fetch
 from image_generate import image_generate
 # [cite_start]Import the functions for file processing from pdf.py. [cite: 269, 270, 271]
 from pdf import generate_summary, generate_question, generate_text
-
+from mnist import image_classification # <-- ADD THIS LINE
+# [cite_end]
 # [cite_end]
 
 # --- Gradio UI 布局与事件处理 ---
@@ -34,7 +35,7 @@ with gr.Blocks() as demo:
         )
         clear_btn = gr.Button('清空')
         # [cite_start]Allow uploading of text files. [cite: 254]
-        upload_btn = gr.UploadButton("📁", file_types=["text"])
+        upload_btn = gr.UploadButton("📁", file_types=["text", "image"])
         # [cite_end]
 
 
@@ -109,46 +110,64 @@ with gr.Blocks() as demo:
 
 
     # [cite_start]Implement the file upload handler function. [cite: 272]
-    def handle_file_upload(file, ui_history, model_history):
-        # [cite_start]Check if the uploaded file is a .txt file. [cite: 254]
-        if file is not None and file.name.endswith(".txt"):
+    def handle_file_upload(file, ui_history, model_history, current_file_text):
+        if file is not None and file.name.lower().endswith(".txt"):
             filename = os.path.basename(file.name)
             ui_history.append({"role": "user", "content": f"File uploaded: {filename}"})
             yield ui_history, model_history, "", gr.update(interactive=False)
 
             try:
-                # [cite_start]Read the text content from the uploaded file. [cite: 254]
                 with open(file.name, 'r', encoding='utf-8') as f:
                     file_content = f.read()
-                # [cite_end]
-                # [cite_start]Generate the prompt for summarizing the file. [cite: 270, 272]
                 summary_prompt = generate_summary(file_content)
-                # [cite_end]
-                # [cite_start]Update the model's history to include the summarization request. [cite: 255]
                 model_history.append({"role": "user", "content": summary_prompt})
-                # [cite_end]
                 ui_history.append({"role": "assistant", "content": ""})
 
-                # [cite_start]Stream the generated summary to the UI. [cite: 269, 272, 274]
                 response_generator = generate_text(summary_prompt)
                 full_response = ""
                 for chunk in response_generator:
                     full_response += chunk
                     ui_history[-1]["content"] = full_response
                     yield ui_history, model_history, file_content, gr.update(interactive=False)
-                # [cite_end]
-                # [cite_start]Update the model's history with the full summary. [cite: 257]
+
                 model_history.append({"role": "assistant", "content": full_response})
-                # [cite_end]
                 yield ui_history, model_history, file_content, gr.update(interactive=True)
             except Exception as e:
                 ui_history.append({"role": "assistant", "content": f"Error processing file: {e}"})
                 yield ui_history, model_history, "", gr.update(interactive=True)
+
+        # [cite_start]Add a new branch to handle PNG image file uploads for classification. [cite: 326]
+        elif file is not None and file.name.lower().endswith((".png", ".jpg", ".jpeg")):
+            filename = os.path.basename(file.name)
+
+            # [cite_start]Display the uploaded image in the UI history. [cite: 319]
+            # Add a 'content' key, which can be None or an empty string.
+            ui_history.append({"role": "user", "content": "", "files": [file.name]})
+            yield ui_history, model_history, current_file_text, gr.update(interactive=False)
+
+            # [cite_start]Update the backend model history as per requirements. [cite: 319]
+            model_history.append({"role": "user", "content": f"Please classify {filename}"})
+
+            try:
+                # [cite_start]Call the classification function from mnist.py. [cite: 325, 326]
+                result_text = image_classification(file)
+
+                # [cite_start]Update backend model history with the assistant's response. [cite: 319]
+                model_history.append({"role": "assistant", "content": result_text})
+
+                # Display the classification result in the UI.
+                ui_history.append({"role": "assistant", "content": result_text})
+
+            except Exception as e:
+                error_message = f"Error classifying image: {e}"
+                ui_history.append({"role": "assistant", "content": error_message})
+
+            yield ui_history, model_history, current_file_text, gr.update(interactive=True)
+        # [cite_end]
         else:
             ui_history.append({"role": "user", "content": "File upload attempted."})
-            ui_history.append({"role": "assistant", "content": "This function only supports .txt files."})
-            yield ui_history, model_history, "", gr.update(interactive=True)
-
+            ui_history.append({"role": "assistant", "content": "This function only supports .txt and image files."})
+            yield ui_history, model_history, current_file_text, gr.update(interactive=True)
 
     # [cite_end]
     # [cite_end]
@@ -170,7 +189,7 @@ with gr.Blocks() as demo:
     # [cite_start]Bind the upload handler to the upload button. [cite: 272]
     upload_btn.upload(
         handle_file_upload,
-        [upload_btn, chatbot_ui, model_messages],
+        [upload_btn, chatbot_ui, model_messages, current_file_text],  # <-- ADD current_file_text HERE
         [chatbot_ui, model_messages, current_file_text, txt_input],
         queue=True
     )
