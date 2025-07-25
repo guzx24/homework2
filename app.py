@@ -58,7 +58,40 @@ with gr.Blocks() as demo:
             yield ui_history, model_history, file_text, gr.update(interactive=True)
             return
 
-        # [cite_start]Add handler for the '/file' command. [cite: 273]
+        # +++ START OF ADDED CODE +++
+        elif user_input.startswith('/fetch '):
+            url = user_input[7:].strip()
+            ui_history.append({"role": "assistant", "content": f"Fetching content from {url}..."})
+            yield ui_history, model_history, file_text, gr.update(interactive=False)
+
+            try:
+                # 调用 fetch 函数获取处理后的内容和问题
+                question_prompt = fetch(url)
+                if question_prompt.startswith("["):  # 检查是否抓取失败
+                    ui_history[-1]["content"] = f"Failed to fetch content: {question_prompt}"
+                    yield ui_history, model_history, file_text, gr.update(interactive=True)
+                    return
+
+                model_history.append({"role": "user", "content": question_prompt})
+                ui_history[-1]["content"] = ""  # 准备接收流式输出
+
+                # 使用 chat 函数获取模型回答
+                response_generator = chat(model_history)
+                full_response = ""
+                for chunk in response_generator:
+                    full_response += chunk
+                    ui_history[-1]["content"] = full_response
+                    yield ui_history, model_history, file_text, gr.update(interactive=False)
+
+                model_history.append({"role": "assistant", "content": full_response})
+
+            except Exception as e:
+                ui_history[-1]["content"] = f"An error occurred while fetching the URL: {e}"
+
+            yield ui_history, model_history, file_text, gr.update(interactive=True)
+            return
+        # +++ END OF ADDED CODE +++
+
         elif user_input.startswith('/file '):
             if not file_text:
                 ui_history.append(
@@ -67,29 +100,20 @@ with gr.Blocks() as demo:
                 return
 
             content = user_input[6:].strip()
-            # [cite_start]Generate a question prompt from the file content and user query. [cite: 271, 273]
             question_prompt = generate_question(file_text, content)
-            # [cite_end]
-            # [cite_start]Update the backend model history with the user's command. [cite: 254]
             model_history.append({"role": "user", "content": user_input})
-            # [cite_end]
             ui_history.append({"role": "assistant", "content": ""})
 
-            # [cite_start]Call the streaming text generation function for the answer. [cite: 269, 273, 274]
             response_generator = generate_text(question_prompt)
-            # [cite_end]
             full_response = ""
             for chunk in response_generator:
                 full_response += chunk
                 ui_history[-1]["content"] = full_response
                 yield ui_history, model_history, file_text, gr.update(interactive=False)
 
-            # [cite_start]Update model history with the final generated answer. [cite: 259]
             model_history.append({"role": "assistant", "content": full_response})
-            # [cite_end]
             yield ui_history, model_history, file_text, gr.update(interactive=True)
             return
-        # [cite_end]
 
         # --- Default Chat ---
         else:
@@ -103,8 +127,6 @@ with gr.Blocks() as demo:
                 yield ui_history, model_history, file_text, gr.update(interactive=False)
             model_history.append({"role": "assistant", "content": full_response})
             yield ui_history, model_history, file_text, gr.update(interactive=True)
-
-
     def clear_chat_history():
         return [], [], ""
 
